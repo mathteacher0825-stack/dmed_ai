@@ -18,3 +18,7 @@ services:
         value: "false"
       - key: PUBLIC_URL
         sync: false
+      - key: FORCE_SUB_CHANNEL
+        value: "@aidmedbot_med"
+      - key: FORCE_SUB_CHANNEL_URL
+        value: "https://t.me/aidmedbot_med"

@@ -16,6 +16,14 @@ if not TOKEN:
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))  # Set your Telegram user ID here
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
+# ─────────────────────────── FORCE SUBSCRIBE (MAJBURIY OBUNA) SOZLAMALARI ───────────────────────────
+# Botdan foydalanish uchun har bir foydalanuvchi quyidagi kanalga a'zo bo'lishi shart.
+# MUHIM: Bot ushbu kanalda ADMINISTRATOR bo'lishi kerak, aks holda getChatMember
+# so'rovi xato qaytaradi va obuna tekshiruvi ishlamaydi.
+FORCE_SUB_CHANNEL = os.environ.get("FORCE_SUB_CHANNEL", "@aidmedbot_med")
+FORCE_SUB_CHANNEL_URL = os.environ.get("FORCE_SUB_CHANNEL_URL", "https://t.me/aidmedbot_med")
+FORCE_SUB_TEXT = "Botdan foydalanish uchun avval DMed rasmiy kanaliga a'zo bo'ling."
+
 # Test mode: 1 hour = 3600 seconds instead of 80 days
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
 NOTIFY_SECONDS = 3600 if TEST_MODE else  1 * 3600  # 1 hour test OR 80 days
@@ -120,6 +128,73 @@ def edit_message(chat_id, message_id, text, reply_markup=None):
 def set_webhook(url):
     r = requests.post(f"{BASE_URL}/setWebhook", json={"url": url, "drop_pending_updates": True})
     logger.info(f"setWebhook response: {r.json()}")
+
+# ─────────────────────────── FORCE SUBSCRIBE (MAJBURIY OBUNA) ───────────────────────────
+# Har bir foydalanuvchi botdan foydalanishdan oldin FORCE_SUB_CHANNEL kanaliga
+# a'zo bo'lishi shart. Tekshiruv Telegram'ning getChatMember API metodi orqali
+# amalga oshiriladi. Bot ushbu kanalda albatta ADMINISTRATOR bo'lishi kerak,
+# aks holda getChatMember "Bad Request" xatosi bilan qaytadi.
+
+_sub_cache = {}          # {telegram_id: (is_member: bool, checked_at: float)}
+_sub_cache_lock = threading.Lock()
+_SUB_CACHE_TTL = 30       # soniya — ortiqcha getChatMember chaqiriqlarini kamaytirish uchun
+
+
+def check_channel_subscription(telegram_id, use_cache=True):
+    """
+    Foydalanuvchining FORCE_SUB_CHANNEL kanaliga a'zo ekanligini tekshiradi.
+    True  -> foydalanuvchi kanalga a'zo (member/admin/creator/restricted)
+    False -> a'zo emas (left/kicked) yoki tekshiruvda xatolik yuz berdi
+    """
+    now = time.time()
+    if use_cache:
+        with _sub_cache_lock:
+            cached = _sub_cache.get(telegram_id)
+            if cached and (now - cached[1]) < _SUB_CACHE_TTL:
+                return cached[0]
+
+    is_member = False
+    try:
+        r = requests.get(
+            f"{BASE_URL}/getChatMember",
+            params={"chat_id": FORCE_SUB_CHANNEL, "user_id": telegram_id},
+            timeout=10,
+        )
+        result = r.json()
+        if result.get("ok"):
+            status = result["result"]["status"]
+            # "left" va "kicked" -> a'zo emas. Qolgan holatlar (member,
+            # administrator, creator, restricted) -> kanalga a'zo hisoblanadi.
+            is_member = status in ("member", "administrator", "creator", "restricted")
+        else:
+            # Eng ko'p uchraydigan sabab: bot kanalda ADMIN emas yoki
+            # FORCE_SUB_CHANNEL noto'g'ri ko'rsatilgan.
+            logger.error(
+                f"getChatMember xato (user_id={telegram_id}, chat_id={FORCE_SUB_CHANNEL}): {result}. "
+                f"Bot '{FORCE_SUB_CHANNEL}' kanalida ADMINISTRATOR ekanligini tekshiring!"
+            )
+            is_member = False
+    except Exception as e:
+        logger.error(f"check_channel_subscription error: {e}")
+        is_member = False
+
+    with _sub_cache_lock:
+        _sub_cache[telegram_id] = (is_member, now)
+    return is_member
+
+
+def force_sub_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "📢 Kanalga qo'shilish", "url": FORCE_SUB_CHANNEL_URL}],
+            [{"text": "✅ Tekshirish", "callback_data": "check_subscription"}],
+        ]
+    }
+
+
+def send_force_sub_message(chat_id):
+    send_message(chat_id, FORCE_SUB_TEXT, reply_markup=force_sub_keyboard())
+
 
 # ─────────────────────────── SESSION (in-memory) ───────────────────────────
 # user_state[chat_id] = {"step": ..., "data": {...}}
@@ -683,7 +758,25 @@ def process_update(update):
             data = cq.get("data", "")
             chat_id = cq["message"]["chat"]["id"]
             telegram_id = cq["from"]["id"]
+            message_id = cq["message"]["message_id"]
+
+            # ── Force Subscribe: "✅ Tekshirish" tugmasi ──
+            if data == "check_subscription":
+                if check_channel_subscription(telegram_id, use_cache=False):
+                    answer_callback(cq_id, "✅ Obuna tasdiqlandi!")
+                    edit_message(chat_id, message_id, "✅ Obuna tasdiqlandi! Davom etishingiz mumkin.")
+                    handle_start(chat_id, telegram_id, cq["from"])
+                else:
+                    answer_callback(cq_id, "❌ Siz hali kanalga a'zo bo'lmagansiz.")
+                    edit_message(chat_id, message_id, FORCE_SUB_TEXT, reply_markup=force_sub_keyboard())
+                return
+
             answer_callback(cq_id)
+
+            # ── Force Subscribe: barcha boshqa callbacklar uchun tekshiruv ──
+            if not check_channel_subscription(telegram_id):
+                send_force_sub_message(chat_id)
+                return
 
             if not is_admin(telegram_id) and not is_approved_doctor(telegram_id):
                 send_message(chat_id, "⛔ Sizda ruxsat yo'q.")
@@ -736,6 +829,11 @@ def process_update(update):
             telegram_id = msg["from"]["id"]
             user = msg["from"]
             text = msg.get("text", "")
+
+            # ── Force Subscribe: barcha xabarlar/komandalar uchun tekshiruv ──
+            if not check_channel_subscription(telegram_id):
+                send_force_sub_message(chat_id)
+                return
 
             if text.startswith("/start"):
                 clear_state(chat_id)

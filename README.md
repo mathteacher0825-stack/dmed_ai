@@ -69,6 +69,22 @@ Agar ma’lumotlar yo‘qolmasin desangiz, Render’da Persistent Disk ulash yok
 
 ---
 
+---
+
+## 🔒 Majburiy obuna (Force Subscribe)
+Bot foydalanuvchilardan avval @aidmedbot_med kanaliga a'zo bo'lishni talab qiladi.
+
+**MUHIM SOZLASH:**
+1. Botni `@aidmedbot_med` kanaliga **administrator** qilib qo'shing (kamida "Add users via link" / a'zolarni ko'rish huquqi bilan). Bu shart — aks holda `getChatMember` ishlamaydi va hech kim botdan foydalana olmaydi.
+2. Ixtiyoriy: boshqa kanal ishlatmoqchi bo'lsangiz, Render Environment'da `FORCE_SUB_CHANNEL` (masalan `@mychannel`) va `FORCE_SUB_CHANNEL_URL` (masalan `https://t.me/mychannel`) qiymatlarini o'zgartiring.
+
+**Qanday ishlaydi:**
+- `/start` yoki istalgan tugma/xabar yuborilganda bot avval foydalanuvchining kanalga a'zoligini tekshiradi.
+- A'zo bo'lmasa — "📢 Kanalga qo'shilish" va "✅ Tekshirish" tugmalari bilan xabar chiqadi, boshqa hech narsa ishlamaydi.
+- "✅ Tekshirish" bosilganda qayta tekshiriladi; a'zo bo'lsa — odatdagi menyu ochiladi, bo'lmasa — yana shu oyna chiqadi.
+
+---
+
 ## Endpoint'lar
 | URL | Vazifa |
 |-----|--------|
